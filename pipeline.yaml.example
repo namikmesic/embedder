@@ -1,0 +1,23 @@
+# Git RAG MCP Pipeline Configuration
+# Copy to pipeline.yaml and customize.
+
+# Chunking settings
+chunk:
+  chunk_size: 512       # tokens per chunk
+  overlap: 64           # overlap in tokens
+  strategy: fixed       # fixed | semantic
+
+# Embedding model
+embedder:
+  provider: sentence_transformers   # sentence_transformers | openai
+  model_name: all-MiniLM-L6-v2     # or text-embedding-3-small for OpenAI
+  batch_size: 64
+
+# Vector store
+store:
+  backend: qdrant       # qdrant | faiss
+  persist_dir: ./data/qdrant
+  qdrant_collection: git_rag
+
+# Where to clone repos
+repos_dir: ./data/repos

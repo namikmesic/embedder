@@ -1,62 +1,28 @@
-"""State management: repo registry and ingestion tracking."""
-
 from __future__ import annotations
 
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-from models import RepoConfig
+from pydantic import BaseModel, Field
+
+from config.models import RepoConfig
 
 logger = logging.getLogger(__name__)
 
 
-class RepoState:
-    """Tracks the state of a single registered repository."""
-
-    def __init__(
-        self,
-        config: RepoConfig,
-        last_ingested_commit: Optional[str] = None,
-        last_ingested_at: Optional[str] = None,
-        chunk_count: int = 0,
-        status: str = "pending",
-        error: Optional[str] = None,
-    ):
-        self.config = config
-        self.last_ingested_commit = last_ingested_commit
-        self.last_ingested_at = last_ingested_at
-        self.chunk_count = chunk_count
-        self.status = status  # pending | ingesting | ready | error
-        self.error = error
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "config": self.config.model_dump(),
-            "last_ingested_commit": self.last_ingested_commit,
-            "last_ingested_at": self.last_ingested_at,
-            "chunk_count": self.chunk_count,
-            "status": self.status,
-            "error": self.error,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> RepoState:
-        return cls(
-            config=RepoConfig(**data["config"]),
-            last_ingested_commit=data.get("last_ingested_commit"),
-            last_ingested_at=data.get("last_ingested_at"),
-            chunk_count=data.get("chunk_count", 0),
-            status=data.get("status", "pending"),
-            error=data.get("error"),
-        )
+class RepoState(BaseModel):
+    config: RepoConfig
+    last_ingested_commit: Optional[str] = None
+    last_ingested_at: Optional[str] = None
+    chunk_count: int = 0
+    status: str = "pending"  # pending | ingesting | ready | error
+    error: Optional[str] = None
 
 
 class StateManager:
-    """Manages the persistent state of all registered repos."""
-
     def __init__(self, state_path: str = "./data/state.json"):
         self._path = Path(state_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,13 +34,13 @@ class StateManager:
             try:
                 data = json.loads(self._path.read_text())
                 for repo_id, repo_data in data.get("repos", {}).items():
-                    self._repos[repo_id] = RepoState.from_dict(repo_data)
+                    self._repos[repo_id] = RepoState.model_validate(repo_data)
                 logger.info("Loaded state: %d repos", len(self._repos))
             except Exception as e:
                 logger.warning("Failed to load state from %s: %s", self._path, e)
 
     def save(self) -> None:
-        data = {"repos": {rid: rs.to_dict() for rid, rs in self._repos.items()}}
+        data = {"repos": {rid: rs.model_dump() for rid, rs in self._repos.items()}}
         self._path.write_text(json.dumps(data, indent=2, default=str))
 
     def add_repo(self, config: RepoConfig) -> RepoState:

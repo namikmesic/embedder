@@ -21,3 +21,25 @@ store:
 
 # Where to clone repos
 repos_dir: ./data/repos
+
+# Agent swarm for bootstrap documentation generation
+agents:
+  orchestrator:
+    provider: openai              # openai | transformers
+    model_name: gpt-4o            # Strong model for synthesis
+    # api_key: sk-...             # Or set GIT_RAG_ORCHESTRATOR_API_KEY
+    # base_url: https://...       # For Anthropic or other OpenAI-compatible APIs
+    max_tokens: 4096
+    temperature: 0.2
+    context_window: 128000
+  sub_agent:
+    provider: openai
+    model_name: gpt-4o-mini       # Fast/cheap model for exploration
+    # api_key: sk-...             # Or set GIT_RAG_SUB_AGENT_API_KEY
+    # base_url: https://...
+    max_tokens: 4096
+    temperature: 0.2
+    context_window: 128000
+  context_budget_fraction: 0.25   # Max fraction of context window for source material
+  max_concurrent_agents: 4
+  max_followup_rounds: 2

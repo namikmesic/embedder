@@ -1,107 +1,31 @@
 #!/usr/bin/env python3
-"""Git RAG CLI — turn git repos into queryable knowledge bases."""
-
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import click
 
-from config import load_config
-from ingestion import ingest_repo
-from models import PipelineConfig, RepoConfig, StoreBackend
-from pipeline.chunker import Chunker
-from pipeline.embedder import Embedder, create_embedder
-from pipeline.preprocessor import Preprocessor
-from pipeline.reranker import Reranker
-from pipeline.retriever import Retriever
-from state import StateManager
-from stores.base import VectorStore
-from stores.qdrant_store import QdrantStore
+from app import AppContext, _init_app, _run, pass_app
+from config.loader import load_config
+from config.models import RepoConfig
+from ingest.chunker import Chunker
+from ingest.pipeline import ingest_repo
 
 
 logger = logging.getLogger("git_rag")
 
 
-# ── Application context ─────────────────────────────────────────────────────
-
-
-@dataclass
-class AppContext:
-    """Holds all initialized pipeline components for the lifetime of a CLI invocation."""
-
-    config: PipelineConfig
-    embedder: Embedder
-    store: VectorStore
-    preprocessor: Preprocessor
-    chunker: Chunker
-    retriever: Retriever
-    reranker: Reranker
-    state: StateManager
-
-
-pass_app = click.make_pass_decorator(AppContext)
-
-
-def _run(coro):
-    """Run an async coroutine from synchronous Click handler."""
-    return asyncio.run(coro)
-
-
-async def _init_app(config: PipelineConfig) -> AppContext:
-    """Initialize all pipeline components."""
-    embedder = create_embedder(config.embedder)
-
-    if config.store.backend == StoreBackend.QDRANT:
-        store = QdrantStore(
-            dimension=embedder.dimension,
-            persist_dir=config.store.persist_dir,
-            collection_name=config.store.qdrant_collection,
-        )
-    elif config.store.backend == StoreBackend.FAISS:
-        from stores.faiss_store import FAISSStore
-
-        store = FAISSStore(dimension=embedder.dimension, persist_dir=config.store.persist_dir)
-        await store.load()
-    else:
-        raise click.ClickException(f"Store backend '{config.store.backend.value}' not yet implemented.")
-
-    preprocessor = Preprocessor()
-    chunker = Chunker(config.chunk)
-    retriever = Retriever(embedder, store)
-    reranker = Reranker()
-    state_mgr = StateManager(state_path=str(Path(config.store.persist_dir).parent / "state.json"))
-
-    return AppContext(
-        config=config,
-        embedder=embedder,
-        store=store,
-        preprocessor=preprocessor,
-        chunker=chunker,
-        retriever=retriever,
-        reranker=reranker,
-        state=state_mgr,
-    )
-
-
 def _progress_echo(fraction: float, message: str) -> None:
-    """Print progress updates to stderr."""
     pct = int(fraction * 100)
     click.echo(f"[{pct:3d}%] {message}", err=True)
 
 
 def _json_output(data: Any) -> None:
-    """Print data as formatted JSON."""
     click.echo(json.dumps(data, indent=2, default=str))
-
-
-# ── CLI group ────────────────────────────────────────────────────────────────
 
 
 @click.group()
@@ -120,11 +44,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     app = _run(_init_app(config))
     ctx.obj = app
 
-    # Ensure store is persisted on exit
     ctx.call_on_close(lambda: _run(app.store.save()))
-
-
-# ── add ──────────────────────────────────────────────────────────────────────
 
 
 @cli.command()
@@ -174,9 +94,6 @@ def add(app: AppContext, url: str, branch: str, file_globs: tuple[str, ...], exc
             click.echo("  Skipped sync (use 'sync' to ingest later).")
 
 
-# ── list ─────────────────────────────────────────────────────────────────────
-
-
 @cli.command("list")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @pass_app
@@ -203,14 +120,10 @@ def list_repos(app: AppContext, as_json: bool) -> None:
         click.echo("No repositories registered. Use 'add' to register one.")
         return
 
-    # Table output
     click.echo(f"{'REPO ID':<14} {'STATUS':<10} {'CHUNKS':>7}  {'URL'}")
     click.echo("-" * 70)
     for r in repos:
         click.echo(f"{r['repo_id']:<14} {r['status']:<10} {r['chunk_count']:>7}  {r['url']}")
-
-
-# ── remove ───────────────────────────────────────────────────────────────────
 
 
 @cli.command()
@@ -239,9 +152,6 @@ def remove(app: AppContext, repo_id: str, keep_chunks: bool, as_json: bool) -> N
         click.echo(f"Removed repo {repo_id}.")
         if not keep_chunks:
             click.echo(f"  Deleted {deleted_chunks} chunks from the vector store.")
-
-
-# ── sync ─────────────────────────────────────────────────────────────────────
 
 
 @cli.command()
@@ -285,9 +195,6 @@ def sync(app: AppContext, repo_id: Optional[str], force_full: bool, as_json: boo
                 click.echo(f"  {r['repo_id']}: {r.get('files_processed', 0)} files, {r.get('chunks_created', 0)} chunks.")
             elif status == "error":
                 click.echo(f"  {r['repo_id']}: ERROR — {r.get('error', 'unknown')}", err=True)
-
-
-# ── status ───────────────────────────────────────────────────────────────────
 
 
 @cli.command()
@@ -362,9 +269,6 @@ def status(app: AppContext, repo_id: Optional[str], as_json: bool) -> None:
                 click.echo(f"{r['repo_id']:<14} {r['status']:<10} {r['chunk_count']:>7}  {r['url']}")
 
 
-# ── query ────────────────────────────────────────────────────────────────────
-
-
 @cli.command()
 @click.argument("query")
 @click.option("-k", "--top-k", default=10, show_default=True, type=int, help="Number of results.")
@@ -399,7 +303,6 @@ def query(app: AppContext, query: str, top_k: int, repo_ids: tuple[str, ...], fi
         _json_output([r.model_dump() for r in results])
         return
 
-    # Human-readable output
     click.echo(f'Query: "{query}"')
     click.echo(f"Found {len(results)} relevant chunks:\n")
 
@@ -417,9 +320,6 @@ def query(app: AppContext, query: str, top_k: int, repo_ids: tuple[str, ...], fi
             text_preview += "..."
         click.echo(f"     {text_preview}")
         click.echo()
-
-
-# ── config ───────────────────────────────────────────────────────────────────
 
 
 @cli.command()
@@ -477,7 +377,124 @@ def config(app: AppContext, chunk_size: Optional[int], chunk_overlap: Optional[i
         click.echo(f"  {key}: {val}")
 
 
-# ── entry point ──────────────────────────────────────────────────────────────
+@cli.command()
+@click.argument("repo_id", required=False, default=None)
+@click.option("--force", is_flag=True, help="Force re-bootstrap even if already done.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@pass_app
+def bootstrap(app: AppContext, repo_id: Optional[str], force: bool, as_json: bool) -> None:
+    """Run LLM agent swarm to generate documentation for a repo."""
+    from bootstrap.pipeline import run_bootstrap
+
+    if repo_id:
+        repo_state = app.state.get_repo(repo_id)
+        if not repo_state:
+            raise click.ClickException(f"Repository '{repo_id}' not found.")
+        repos = [repo_state]
+    else:
+        repos = app.state.list_repos()
+
+    if not repos:
+        raise click.ClickException("No repositories registered. Use 'add' first.")
+
+    callback = None if as_json else _progress_echo
+    results = []
+
+    for rs in repos:
+        if not as_json:
+            click.echo(f"Bootstrapping {rs.config.repo_id} ({rs.config.url})...")
+
+        result = _run(run_bootstrap(
+            repo_config=rs.config,
+            pipeline_config=app.config,
+            embedder=app.embedder,
+            store=app.store,
+            chunker=app.chunker,
+            state_mgr=app.state,
+            force=force,
+            progress_callback=callback,
+        ))
+        results.append(result)
+
+    if as_json:
+        _json_output(results if len(results) > 1 else results[0])
+    else:
+        for r in results:
+            status = r.get("status", "?")
+            if status == "complete":
+                click.echo(f"  {r['repo_id']}: {r.get('entities', 0)} entities, "
+                           f"{r.get('docs_generated', 0)} docs, "
+                           f"{r.get('chunks_created', 0)} chunks embedded "
+                           f"({r.get('tokens_consumed', 0)} tokens used)")
+            elif status == "already_bootstrapped":
+                click.echo(f"  {r['repo_id']}: already bootstrapped. Use --force to redo.")
+            elif status == "error":
+                click.echo(f"  {r['repo_id']}: ERROR — {r.get('error', 'unknown')}", err=True)
+
+
+@cli.command("map")
+@click.argument("repo_id")
+@click.option("--entities-only", is_flag=True, help="Show only entities, no connections.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@pass_app
+def show_map(app: AppContext, repo_id: str, entities_only: bool, as_json: bool) -> None:
+    """View the bootstrap knowledge map for a repo."""
+    from bootstrap.pipeline import load_bootstrap_map
+
+    data_dir = str(Path(app.config.store.persist_dir).parent)
+    bmap = load_bootstrap_map(data_dir, repo_id)
+
+    if not bmap:
+        raise click.ClickException(
+            f"No bootstrap map found for '{repo_id}'. Run 'bootstrap {repo_id}' first."
+        )
+
+    if as_json:
+        _json_output(bmap.model_dump())
+        return
+
+    click.echo(f"Bootstrap Map: {bmap.repo_id}")
+    click.echo(f"  URL:        {bmap.repo_url}")
+    click.echo(f"  Status:     {bmap.status.value}")
+    click.echo(f"  Created:    {bmap.created_at}")
+    click.echo(f"  Entities:   {len(bmap.entities)}")
+    click.echo(f"  Connections: {len(bmap.connections)}")
+    click.echo(f"  Unknowns:   {len(bmap.unresolved_unknowns)}")
+    click.echo(f"  Tokens:     {bmap.total_tokens_consumed}")
+    click.echo()
+
+    from collections import defaultdict
+    by_kind: dict[str, list] = defaultdict(list)
+    for ent in bmap.entities:
+        by_kind[ent.kind.value].append(ent)
+
+    for kind, entities in sorted(by_kind.items()):
+        click.echo(f"  [{kind.upper()}] ({len(entities)})")
+        for e in entities:
+            sig = f" — {e.signature}" if e.signature else ""
+            click.echo(f"    {e.name}{sig}")
+            if e.description:
+                click.echo(f"      {e.description}")
+            click.echo(f"      {e.file_path}")
+        click.echo()
+
+    if not entities_only and bmap.connections:
+        click.echo("  [CONNECTIONS]")
+        id_to_name: dict[str, str] = {e.entity_id: e.name for e in bmap.entities}
+        for conn in bmap.connections:
+            src = id_to_name.get(conn.source_entity_id, conn.source_entity_id)
+            tgt = id_to_name.get(conn.target_entity_id, conn.target_entity_id)
+            click.echo(f"    {src} --[{conn.kind.value}]--> {tgt}")
+            if conn.description:
+                click.echo(f"      {conn.description}")
+        click.echo()
+
+    if bmap.unresolved_unknowns:
+        click.echo(f"  [UNRESOLVED UNKNOWNS] ({len(bmap.unresolved_unknowns)})")
+        for unk in bmap.unresolved_unknowns:
+            click.echo(f"    [{unk.priority}] {unk.description}")
+            if unk.file_path:
+                click.echo(f"       {unk.file_path}")
 
 
 if __name__ == "__main__":

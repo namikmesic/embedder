@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -33,6 +34,9 @@ class Embedder(ABC):
 
     @abstractmethod
     def count_tokens(self, text: str) -> int: ...
+
+    async def close(self) -> None:
+        """Release resources. Override in subclasses that hold clients."""
 
 
 class SentenceTransformerEmbedder(Embedder):
@@ -65,12 +69,16 @@ class SentenceTransformerEmbedder(Embedder):
         all_embeddings = []
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
-            emb = self._model.encode(batch, show_progress_bar=False, normalize_embeddings=True)
+            emb = await asyncio.to_thread(
+                self._model.encode, batch, show_progress_bar=False, normalize_embeddings=True
+            )
             all_embeddings.append(np.array(emb))
         return np.vstack(all_embeddings) if all_embeddings else np.empty((0, self._dimension))
 
     async def embed_query(self, query: str) -> np.ndarray:
-        emb = self._model.encode([query], show_progress_bar=False, normalize_embeddings=True)
+        emb = await asyncio.to_thread(
+            self._model.encode, [query], show_progress_bar=False, normalize_embeddings=True
+        )
         return np.array(emb[0])
 
 
@@ -86,7 +94,7 @@ class OpenAIEmbedder(Embedder):
         "text-embedding-ada-002": 8191,
     }
 
-    def __init__(self, model_name: str = "text-embedding-3-small", api_key: Optional[str] = None, batch_size: int = 64):
+    def __init__(self, model_name: str = "text-embedding-3-small", api_key: str | None = None, batch_size: int = 64):
         import httpx
 
         self._model_id = model_name
@@ -137,6 +145,9 @@ class OpenAIEmbedder(Embedder):
     async def embed_query(self, query: str) -> np.ndarray:
         return (await self._embed_batch([query]))[0]
 
+    async def close(self) -> None:
+        await self._client.aclose()
+
 
 def create_embedder(config: EmbedderConfig) -> Embedder:
     if config.provider == EmbedderProvider.SENTENCE_TRANSFORMERS:
@@ -146,3 +157,21 @@ def create_embedder(config: EmbedderConfig) -> Embedder:
             raise ValueError("OpenAI API key required. Set OPENAI_API_KEY env var.")
         return OpenAIEmbedder(model_name=config.model, api_key=config.openai_api_key, batch_size=config.batch_size)
     raise ValueError(f"Unknown embedder provider: {config.provider}")
+
+
+class EmbedderCache:
+    """Cache embedders by (provider, model) key. Not thread-safe — expects external lock."""
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[EmbedderProvider, str], Embedder] = {}
+
+    def get_or_create(self, config: EmbedderConfig) -> Embedder:
+        key = (config.provider, config.model)
+        if key not in self._cache:
+            self._cache[key] = create_embedder(config)
+        return self._cache[key]
+
+    async def close_all(self) -> None:
+        for emb in self._cache.values():
+            await emb.close()
+        self._cache.clear()

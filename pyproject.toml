@@ -1,6 +1,6 @@
 [project]
 name = "vectordb-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server providing semantic knowledge storage and search"
 readme = "CLAUDE.md"
 requires-python = ">=3.11"
@@ -11,8 +11,21 @@ dependencies = [
     "httpx>=0.25.0",
     "pydantic>=2.0.0",
     "numpy>=1.24.0",
-    "pyyaml>=6.0",
-    "anyio>=4.0.0",
+
     "mcp[cli]>=1.2.0",
     "tiktoken>=0.7.0",
+    "uuid_utils>=0.10.0",
+    "miniopy-async>=1.8",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

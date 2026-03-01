@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "vectordb": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/Users/namik/Library/Application Support/Claude/local-agent-mode-sessions/0749b9f6-721d-4950-9153-2967d52a8705/272760b4-5641-4b64-8684-a9dbac7d2960/local_cd3017b9-a37e-4470-9cb4-b8d8bca6eb69/outputs/git_rag_mcp",
+        "run",
+        "server.py"
+      ]
+    }
+  }
+}
